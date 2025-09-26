@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 import argparse
 import subprocess
+import scipy
 
 from livekit import agents, api, rtc
 from livekit.agents import (
