@@ -27,6 +27,9 @@ from lerobot.motors.feetech import (
 from lerobot.teleoperators import Teleoperator
 from .config_lelamp_leader import LeLampLeaderConfig
 
+from collections import deque
+from scipy.signal import savgol_filter
+
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +56,8 @@ class LeLampLeader(Teleoperator):
             },
             calibration=self.calibration,
         )
+        # 添加SG滤波历史缓存，窗口长度7
+        self._action_history = {motor: deque(maxlen=7) for motor in self.bus.motors}
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -138,11 +143,25 @@ class LeLampLeader(Teleoperator):
     def get_action(self) -> dict[str, float]:
         start = time.perf_counter()
         action = self.bus.sync_read("Present_Position")
-        action = {f"{motor}.pos": val for motor, val in action.items()}
-
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
-        return action
+
+        # SG三阶滤波
+        window_length = 7  # 必须为奇数且大于polyorder
+        polyorder = 3
+        filtered_action = {}
+
+        for motor, val in action.items():
+            hist = self._action_history[motor]
+            hist.append(val)
+            # 历史足够时进行滤波，否则原值
+            if len(hist) >= window_length:
+                filt_val = savgol_filter(list(hist), window_length, polyorder)[-1]
+            else:
+                filt_val = val
+            filtered_action[f"{motor}.pos"] = filt_val
+
+        return filtered_action
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
         # TODO(rcadene, aliberts): Implement force feedback
