@@ -63,8 +63,8 @@ def main():
     parser.add_argument('--port', type=str, required=True, help='Serial port for the lamp')
     args = parser.parse_args()
     
-    if args.follower_only and args.leader_only:
-        raise ValueError("Cannot specify both --follower-only and --leader-only")
+#    if args.follower_only and args.leader_only:
+ #       raise ValueError("Cannot specify both --follower-only and --leader-only")
     
     try:
         print("\n" + "="*50)
