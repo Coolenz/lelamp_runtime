@@ -32,7 +32,6 @@ from scipy.signal import savgol_filter
 
 logger = logging.getLogger(__name__)
 
-
 class LeLampLeader(Teleoperator):
     """
     LeLamp Leader Arm designed by TheRobotStudio and Hugging Face.
@@ -56,8 +55,17 @@ class LeLampLeader(Teleoperator):
             },
             calibration=self.calibration,
         )
-        # 添加SG滤波历史缓存，窗口长度7
+        # SG滤波历史缓存
         self._action_history = {motor: deque(maxlen=7) for motor in self.bus.motors}
+        # S曲线当前输出值
+        self._s_curve_output = {motor: None for motor in self.bus.motors}
+        # S曲线速度缓存
+        self._s_curve_speed = {motor: 0.0 for motor in self.bus.motors}
+
+        # 你可以调整以下参数
+        self._max_speed = 2.0   # 单步最大速度（单位与动作一致，如度/步进）
+        self._max_accel = 1.0   # 单步最大加速度（单位与动作一致）
+        self._dt = 0.02         # 每次get_action的时间间隔（秒），用于速度/加速度计算
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -91,7 +99,6 @@ class LeLampLeader(Teleoperator):
 
     def calibrate(self) -> None:
         if self.calibration:
-            # Calibration file exists, ask user whether to use it or run new calibration
             user_input = input(
                 f"Press ENTER to use provided calibration file associated with the id {self.id}, or type 'c' and press ENTER to run calibration: "
             )
@@ -146,25 +153,67 @@ class LeLampLeader(Teleoperator):
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
 
-        # SG三阶滤波
-        window_length = 7  # 必须为奇数且大于polyorder
+        # Step 1: SG三阶滤波
+        window_length = 7
         polyorder = 3
-        filtered_action = {}
+        sg_filtered = {}
 
         for motor, val in action.items():
             hist = self._action_history[motor]
             hist.append(val)
-            # 历史足够时进行滤波，否则原值
             if len(hist) >= window_length:
                 filt_val = savgol_filter(list(hist), window_length, polyorder)[-1]
             else:
                 filt_val = val
-            filtered_action[f"{motor}.pos"] = filt_val
+            sg_filtered[motor] = filt_val
 
-        return filtered_action
+        # Step 2: S型速度曲线处理
+        s_curve_action = {}
+        for motor, target in sg_filtered.items():
+            if self._s_curve_output[motor] is None:
+                # 初始化
+                self._s_curve_output[motor] = target
+                self._s_curve_speed[motor] = 0.0
+
+            current = self._s_curve_output[motor]
+            speed = self._s_curve_speed[motor]
+            diff = target - current
+
+            # 计算理想速度，方向正确
+            desired_speed = diff / self._dt if self._dt > 0 else diff
+
+            # 限制加速度
+            delta_speed = desired_speed - speed
+            if delta_speed > self._max_accel:
+                delta_speed = self._max_accel
+            elif delta_speed < -self._max_accel:
+                delta_speed = -self._max_accel
+
+            speed += delta_speed
+
+            # 限制速度
+            if speed > self._max_speed:
+                speed = self._max_speed
+            elif speed < -self._max_speed:
+                speed = -self._max_speed
+
+            # 计算新输出（S型曲线近似：加速度-速度-位移三步限制）
+            new_output = current + speed * self._dt
+
+            # 如果接近目标，直接锁定，防止抖动
+            if abs(new_output - target) < 1e-3:
+                new_output = target
+                speed = 0.0
+
+            # 保存状态
+            self._s_curve_output[motor] = new_output
+            self._s_curve_speed[motor] = speed
+
+            s_curve_action[f"{motor}.pos"] = new_output
+
+        return s_curve_action
 
     def send_feedback(self, feedback: dict[str, float]) -> None:
-        # TODO(rcadene, aliberts): Implement force feedback
         raise NotImplementedError
 
     def disconnect(self) -> None:
