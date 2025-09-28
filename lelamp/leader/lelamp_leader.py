@@ -28,7 +28,7 @@ from lerobot.teleoperators import Teleoperator
 from .config_lelamp_leader import LeLampLeaderConfig
 
 from collections import deque
-from scipy.signal import savgol_filter
+from scipy.signal import butter, filtfilt
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +56,14 @@ class LeLampLeader(Teleoperator):
             },
             calibration=self.calibration,
         )
-        # 添加SG滤波历史缓存，窗口长度7
-        self._action_history = {motor: deque(maxlen=7) for motor in self.bus.motors}
+        # Butterworth滤波历史缓存，窗口长度21
+        self._action_history = {motor: deque(maxlen=21) for motor in self.bus.motors}
+
+        # Butterworth滤波器参数
+        # N: 阶数，Wn: 归一化截止频率（建议0.1左右，实际可调）
+        self._butter_N = 3
+        self._butter_Wn = 0.1  # 0.1=强平滑，0.2=稍快响应
+        self._butter_b, self._butter_a = butter(N=self._butter_N, Wn=self._butter_Wn, btype='low')
 
     @property
     def action_features(self) -> dict[str, type]:
@@ -91,7 +97,6 @@ class LeLampLeader(Teleoperator):
 
     def calibrate(self) -> None:
         if self.calibration:
-            # Calibration file exists, ask user whether to use it or run new calibration
             user_input = input(
                 f"Press ENTER to use provided calibration file associated with the id {self.id}, or type 'c' and press ENTER to run calibration: "
             )
@@ -146,17 +151,14 @@ class LeLampLeader(Teleoperator):
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read action: {dt_ms:.1f}ms")
 
-        # SG三阶滤波
-        window_length = 7  # 必须为奇数且大于polyorder
-        polyorder = 3
         filtered_action = {}
-
         for motor, val in action.items():
             hist = self._action_history[motor]
             hist.append(val)
-            # 历史足够时进行滤波，否则原值
-            if len(hist) >= window_length:
-                filt_val = savgol_filter(list(hist), window_length, polyorder)[-1]
+            if len(hist) >= hist.maxlen:
+                # Butterworth低通滤波，零相位
+                y = filtfilt(self._butter_b, self._butter_a, list(hist))
+                filt_val = y[-1]
             else:
                 filt_val = val
             filtered_action[f"{motor}.pos"] = filt_val
