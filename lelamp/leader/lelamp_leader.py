@@ -57,11 +57,11 @@ class LeLampLeader(Teleoperator):
             calibration=self.calibration,
         )
         # Butterworth滤波历史缓存，窗口长度21
-        self._action_history = {motor: deque(maxlen=21) for motor in self.bus.motors}
+        self._action_history = {motor: deque(maxlen=30) for motor in self.bus.motors}
 
         # Butterworth滤波器参数
         # N: 阶数，Wn: 归一化截止频率（建议0.1左右，实际可调）
-        self._butter_N = 3
+        self._butter_N = 5
         self._butter_Wn = 0.1  # 0.1=强平滑，0.2=稍快响应
         self._butter_b, self._butter_a = butter(N=self._butter_N, Wn=self._butter_Wn, btype='low')
 
